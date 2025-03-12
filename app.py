@@ -121,4 +121,59 @@ def handle_reminder_command(user_id, text):
         rows = c.fetchall()
         conn.close()
         if not rows:
-            retu
+            return "您尚未設定任何提醒"
+        res = "您的提醒：\n"
+        for row in rows:
+            if row[3] == 1:
+                res += f"ID:{row[0]} 時間:{row[1]} 訊息:{row[2]} 週期:{row[4]}\n"
+            else:
+                res += f"ID:{row[0]} 時間:{row[1]} 訊息:{row[2]}\n"
+        return res
+    else:
+        return "未知指令，請使用 add, add-periodic, delete, list"
+
+# 使用 ChatGPT 回覆訊息
+def chatgpt_reply(user_text):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_text}],
+            temperature=0.7,
+            max_tokens=150
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return "ChatGPT 出現錯誤: " + str(e)
+
+# 定時提醒發送：此端點用於檢查資料庫中符合當前時間的提醒，並發送訊息
+# 建議設定 Render 的 Cron Job 或使用 UptimeRobot 定時觸發此端點
+@app.route("/send_reminders", methods=["GET"])
+def send_reminders():
+    now = datetime.datetime.now()
+    current_time = now.strftime("%H:%M")
+    conn = sqlite3.connect("reminders.db")
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, message, periodic, recurrence FROM reminders WHERE time=?", (current_time,))
+    rows = c.fetchall()
+    conn.close()
+    sent = []
+    for row in rows:
+        reminder_id, user_id, message, periodic, recurrence = row
+        # 若為一次性提醒，發送後刪除
+        if periodic == 0:
+            line_bot_api.push_message(user_id, [TextSendMessage(text=message)])
+            conn = sqlite3.connect("reminders.db")
+            c = conn.cursor()
+            c.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
+            conn.commit()
+            conn.close()
+            sent.append(f"一次性提醒 {reminder_id} 發送給 {user_id}")
+        else:
+            # 每日提醒直接發送；若為每週提醒，可在此進行額外檢查（例如依星期幾發送）
+            line_bot_api.push_message(user_id, [TextSendMessage(text=message)])
+            sent.append(f"週期提醒 {reminder_id} 發送給 {user_id}")
+    return jsonify({"sent": sent})
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
